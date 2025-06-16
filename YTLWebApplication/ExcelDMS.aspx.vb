@@ -1,356 +1,239 @@
-﻿Imports System.Data.SqlClient
+Imports System.Data.SqlClient
 Imports ExcelLibrary
 Imports ExcelLibrary.SpreadSheet
 Imports System.IO
+Imports System.Text.RegularExpressions
+
 Partial Class ExcelDMS
     Inherits System.Web.UI.Page
 
     Protected Sub Page_Load(sender As Object, e As System.EventArgs) Handles Me.Load
         Try
-
-
-
-            Dim wb As New Workbook()
-            Dim sheetrowcounter As Integer
-            Dim sheetrowcounter2 As Integer = 0
-            sheetrowcounter = 0
-            Dim tplateno As String = Request.QueryString("tplateno")
+            ' Validate authentication
+            If Not AuthenticationHelper.IsUserAuthenticated() Then
+                Response.StatusCode = 401
+                Response.End()
+                Return
+            End If
+            
+            ' Validate and sanitize query parameters
+            Dim tplateno As String = SecurityHelper.SanitizeForSql(Request.QueryString("tplateno"))
             Dim tbdt As String = Request.QueryString("tbdt")
             Dim tedt As String = Request.QueryString("tedt")
-            Dim sheet As New ExcelLibrary.SpreadSheet.Worksheet("DMS (PORJECT GRANDE)")
-
-
-
-
-            sheet.Cells(sheetrowcounter, 0) = New Cell("DELIVERY MONITORING SUMMARY(PROJECT GRANDE) ")
-            sheet.Cells(sheetrowcounter, 2) = New Cell("")
-
-            sheet.Cells(sheetrowcounter, 3) = New Cell("Report Date: " & DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") & "                                                                                                                   ")
-            sheet.Cells(sheetrowcounter, 5) = New Cell("")
+            
+            ' Validate inputs
+            If Not SecurityHelper.ValidateInput(tplateno, "plateno") OrElse
+               Not SecurityHelper.ValidateInput(tbdt, "date") OrElse
+               Not SecurityHelper.ValidateInput(tedt, "date") Then
+                SecurityHelper.LogSecurityEvent("INVALID_EXCEL_PARAMS", "Invalid parameters for Excel export")
+                Response.StatusCode = 400
+                Response.End()
+                Return
+            End If
+            
+            GenerateExcelReport(tplateno, tbdt, tedt)
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("EXCEL_DMS_ERROR", "Error in ExcelDMS: " & ex.Message)
+            Response.StatusCode = 500
+            Response.End()
+        End Try
+    End Sub
+    
+    Private Sub GenerateExcelReport(tplateno As String, tbdt As String, tedt As String)
+        Try
+            Dim wb As New Workbook()
+            Dim sheetrowcounter As Integer = 0
+            Dim sheetrowcounter2 As Integer = 0
+            
+            Dim sheet As New ExcelLibrary.SpreadSheet.Worksheet("DMS (PROJECT GRANDE)")
+            
+            ' Add header information
+            sheet.Cells(sheetrowcounter, 0) = New Cell("DELIVERY MONITORING SUMMARY(PROJECT GRANDE)")
+            sheet.Cells(sheetrowcounter, 3) = New Cell("Report Date: " & DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss"))
             sheet.Cells(sheetrowcounter, 6) = New Cell("S=Suspect, V/V2=Valid/Double Check, P=Pending")
+            sheetrowcounter += 2
+            
+            ' Add column headers
+            AddColumnHeaders(sheet, sheetrowcounter)
             sheetrowcounter += 1
-            sheetrowcounter += 1
-            sheet.Cells(sheetrowcounter, 8) = New Cell("Out Weight Brige")
-            sheet.Cells(sheetrowcounter, 10) = New Cell("")
-            sheet.Cells(sheetrowcounter, 18) = New Cell("Journey Trial")
-            sheet.Cells(sheetrowcounter, 19) = New Cell("")
-            sheet.Cells(sheetrowcounter, 22) = New Cell("Journey Back")
-            sheet.Cells(sheetrowcounter, 23) = New Cell("")
-            sheetrowcounter += 1
-
-            sheet.Cells(sheetrowcounter, 0) = New Cell("Customer/Ship To Name")
-            sheet.Cells.ColumnWidth(0) = 15000
-            sheet.Cells(sheetrowcounter, 1) = New Cell("SHIP TO CODE")
-            sheet.Cells.ColumnWidth(1) = 3300
-            sheet.Cells(sheetrowcounter, 2) = New Cell("ORDER NO")
-            sheet.Cells.ColumnWidth(2) = 3300
-            sheet.Cells(sheetrowcounter, 3) = New Cell("EX")
-            sheet.Cells.ColumnWidth(3) = 1500
-            sheet.Cells(sheetrowcounter, 4) = New Cell("TPT")
-            sheet.Cells.ColumnWidth(4) = 10000
-            sheet.Cells(sheetrowcounter, 5) = New Cell("Vehicle No")
-            sheet.Cells.ColumnWidth(5) = 3000
-            sheet.Cells(sheetrowcounter, 6) = New Cell("MT")
-            sheet.Cells.ColumnWidth(6) = 3000
-            sheet.Cells(sheetrowcounter, 7) = New Cell("DN No")
-            sheet.Cells.ColumnWidth(7) = 3000
-            sheet.Cells(sheetrowcounter, 8) = New Cell("Date")
-            sheet.Cells.ColumnWidth(8) = 3000
-            sheet.Cells(sheetrowcounter, 9) = New Cell("Time")
-            sheet.Cells.ColumnWidth(9) = 3000
-            sheet.Cells(sheetrowcounter, 10) = New Cell("Journey to Cust")
-            sheet.Cells.ColumnWidth(10) = 4000
-            sheet.Cells(sheetrowcounter, 11) = New Cell("ATA")
-            sheet.Cells.ColumnWidth(11) = 3000
-            sheet.Cells(sheetrowcounter, 12) = New Cell("ATD")
-            sheet.Cells.ColumnWidth(12) = 3000
-            sheet.Cells(sheetrowcounter, 13) = New Cell("Time Spent at Site")
-            sheet.Cells.ColumnWidth(13) = 3000
-            sheet.Cells(sheetrowcounter, 14) = New Cell("Back to Source")
-            sheet.Cells.ColumnWidth(14) = 3000
-            sheet.Cells(sheetrowcounter, 15) = New Cell("PTO ON Time")
-            sheet.Cells.ColumnWidth(15) = 3000
-            sheet.Cells(sheetrowcounter, 16) = New Cell("PTO OFF Time")
-            sheet.Cells.ColumnWidth(16) = 3000
-
-            sheet.Cells(sheetrowcounter, 17) = New Cell("Stop/Idling >15 Mins")
-            sheet.Cells.ColumnWidth(17) = 3000
-            sheet.Cells(sheetrowcounter, 18) = New Cell("Geofence")
-            sheet.Cells.ColumnWidth(18) = 3000
-            sheet.Cells(sheetrowcounter, 19) = New Cell("Duration")
-            sheet.Cells.ColumnWidth(19) = 3000
-            sheet.Cells(sheetrowcounter, 20) = New Cell("PTO")
-            sheet.Cells.ColumnWidth(20) = 3000
-            sheet.Cells(sheetrowcounter, 21) = New Cell("PTO Status")
-            sheet.Cells.ColumnWidth(21) = 3000
-
-            sheet.Cells(sheetrowcounter, 22) = New Cell("Stop/Idling >15 Mins")
-            sheet.Cells.ColumnWidth(22) = 3000
-            sheet.Cells(sheetrowcounter, 23) = New Cell("Geofence")
-            sheet.Cells.ColumnWidth(23) = 3000
-            sheet.Cells(sheetrowcounter, 24) = New Cell("Duration")
-            sheet.Cells.ColumnWidth(24) = 3000
-            sheet.Cells(sheetrowcounter, 25) = New Cell("PTO")
-            sheet.Cells.ColumnWidth(25) = 3000
-            sheet.Cells(sheetrowcounter, 26) = New Cell("PTO Status")
-            sheet.Cells.ColumnWidth(26) = 3000
-            sheet.Cells(sheetrowcounter, 27) = New Cell("Data Lost & V-Data")
-            sheet.Cells.ColumnWidth(27) = 3000
-            sheet.Cells(sheetrowcounter, 28) = New Cell("Driver Name")
-            sheet.Cells.ColumnWidth(28) = 3000
-            sheet.Cells(sheetrowcounter, 29) = New Cell("DN Qty")
-            sheet.Cells.ColumnWidth(29) = 3000
-
-            sheet.Cells(sheetrowcounter, 30) = New Cell("Travelling {Mins}")
-            sheet.Cells.ColumnWidth(30) = 3000
-            sheet.Cells(sheetrowcounter, 31) = New Cell("Distance")
-            sheet.Cells.ColumnWidth(31) = 3000
-            sheet.Cells(sheetrowcounter, 32) = New Cell("Loading {Mins}")
-            sheet.Cells.ColumnWidth(32) = 3000
-            sheet.Cells(sheetrowcounter, 33) = New Cell("Waiting {Mins}")
-            sheet.Cells.ColumnWidth(33) = 3000
-            sheet.Cells(sheetrowcounter, 34) = New Cell("Unloading {Mins}")
-            sheet.Cells.ColumnWidth(34) = 3000
-
-            sheetrowcounter += 1
+            
+            ' Get data from session
             Dim t As DataTable = Session("exceltable")
-            For i As Integer = 0 To t.Rows.Count - 1
-                Try
-                    sheet.Cells(sheetrowcounter, 0) = New Cell(t.DefaultView.Item(i)(0))
-                    sheet.Cells(sheetrowcounter, 1) = New Cell(Convert.ToDouble(t.DefaultView.Item(i)(1)))
-
-                    Try
-                        If IsDBNull(t.DefaultView.Item(i)(2)) Then
-                            sheet.Cells(sheetrowcounter, 2) = New Cell("-")
-                        Else
-                            sheet.Cells(sheetrowcounter, 2) = New Cell(Convert.ToDouble(t.DefaultView.Item(i)(2)))
-                        End If
-                    Catch ex As Exception
-                        ' WriteLog("21." & t.DefaultView.Item(i)(2))
-                    End Try
-
-                    ' sheet.Cells(sheetrowcounter, 2) = New Cell(Convert.ToDouble(t.DefaultView.Item(i)(2)))
-                    sheet.Cells(sheetrowcounter, 3) = New Cell(t.DefaultView.Item(i)(3))
-                    sheet.Cells(sheetrowcounter, 4) = New Cell(t.DefaultView.Item(i)(4))
-                    sheet.Cells(sheetrowcounter, 5) = New Cell(t.DefaultView.Item(i)(5))
-                    sheet.Cells(sheetrowcounter, 6) = New Cell(t.DefaultView.Item(i)(6))
-
-                    Try
-                        sheet.Cells(sheetrowcounter, 7) = New Cell(t.DefaultView.Item(i)(7))
-                    Catch ex As Exception
-
-                    End Try
-
-                    sheet.Cells(sheetrowcounter, 8) = New Cell(t.DefaultView.Item(i)(8))
-                    sheet.Cells(sheetrowcounter, 9) = New Cell(t.DefaultView.Item(i)(9))
-                    sheet.Cells(sheetrowcounter, 10) = New Cell(t.DefaultView.Item(i)(10))
-                    sheet.Cells(sheetrowcounter, 11) = New Cell(Convert.ToDateTime(t.DefaultView.Item(i)(11)).ToString("yyyy/MM/dd HH:mm:ss"))
-
-                    sheet.Cells(sheetrowcounter, 12) = New Cell(t.DefaultView.Item(i)(12))
-                    sheet.Cells(sheetrowcounter, 13) = New Cell(t.DefaultView.Item(i)(13))
-                    sheet.Cells(sheetrowcounter, 14) = New Cell(t.DefaultView.Item(i)(14))
-                    sheet.Cells(sheetrowcounter, 15) = New Cell(t.DefaultView.Item(i)(15))
-                    sheet.Cells(sheetrowcounter, 16) = New Cell(t.DefaultView.Item(i)(16))
-
-                    sheet.Cells(sheetrowcounter, 17) = New Cell(t.DefaultView.Item(i)(17))
-                    sheet.Cells(sheetrowcounter, 18) = New Cell(t.DefaultView.Item(i)(18).ToString().Replace("<br/>", vbCrLf))
-                    sheet.Cells(sheetrowcounter, 19) = New Cell(t.DefaultView.Item(i)(19).ToString().Replace("<br/>", vbCrLf))
-                    sheet.Cells(sheetrowcounter, 20) = New Cell(t.DefaultView.Item(i)(20).ToString().Replace("<br/>", vbCrLf))
-
-                    sheet.Cells(sheetrowcounter, 21) = New Cell(t.DefaultView.Item(i)(25).ToString())
-
-                    sheet.Cells(sheetrowcounter, 22) = New Cell(t.DefaultView.Item(i)(21))
-                    sheet.Cells(sheetrowcounter, 23) = New Cell(t.DefaultView.Item(i)(22).ToString().Replace("<br/>", vbCrLf))
-                    sheet.Cells(sheetrowcounter, 24) = New Cell(t.DefaultView.Item(i)(23).ToString().Replace("<br/>", vbCrLf))
-                    sheet.Cells(sheetrowcounter, 25) = New Cell(t.DefaultView.Item(i)(24).ToString().Replace("<br/>", vbCrLf))
-                    sheet.Cells(sheetrowcounter, 26) = New Cell(t.DefaultView.Item(i)(26).ToString())
-                    sheet.Cells(sheetrowcounter, 27) = New Cell(t.DefaultView.Item(i)(31).ToString())
-                    Try
-                        sheet.Cells(sheetrowcounter, 28) = New Cell(t.DefaultView.Item(i)(32).ToString())
-                    Catch ex As Exception
-
-                    End Try
-
-                    Try
-                        sheet.Cells(sheetrowcounter, 29) = New Cell(t.DefaultView.Item(i)(33).ToString())
-                    Catch ex As Exception
-
-                    End Try
-
-                    Try
-                        sheet.Cells(sheetrowcounter, 30) = New Cell(t.DefaultView.Item(i)(34).ToString())
-                    Catch ex As Exception
-
-                    End Try
-                    Try
-                        sheet.Cells(sheetrowcounter, 31) = New Cell(t.DefaultView.Item(i)(35).ToString())
-                    Catch ex As Exception
-
-                    End Try
-                    Try
-                        sheet.Cells(sheetrowcounter, 32) = New Cell(t.DefaultView.Item(i)(36).ToString())
-                    Catch ex As Exception
-
-                    End Try
-                    Try
-                        sheet.Cells(sheetrowcounter, 33) = New Cell(t.DefaultView.Item(i)(37).ToString())
-                    Catch ex As Exception
-
-                    End Try
-                    Try
-                        sheet.Cells(sheetrowcounter, 34) = New Cell(t.DefaultView.Item(i)(38).ToString())
-                    Catch ex As Exception
-
-                    End Try
-                    sheetrowcounter += 1
-                Catch ex As Exception
-                    '    Response.Write("Line no- > " & i & " and error = " & ex.Message)
-                End Try
-
-            Next
+            If t IsNot Nothing Then
+                AddDataRows(sheet, t, sheetrowcounter)
+            End If
+            
+            ' Add log report if applicable
             Dim isLog As Boolean = False
-            Try
-
-
-
-                Dim sheet2 As New ExcelLibrary.SpreadSheet.Worksheet(tplateno & " Log report ")
-                sheet2.Cells(sheetrowcounter2, 0) = New Cell("Here Log report For plateno : " & tplateno & " From " & tbdt & "  To  " & tedt)
-                sheet2.Cells(sheetrowcounter2, 9) = New Cell("")
-                Try
-                    If tplateno <> "ALL PLATES" Then
-                        If DateDiff(DateInterval.Minute, Convert.ToDateTime(tbdt), Convert.ToDateTime(tedt)) <= 1440 Then
-                            Dim locObj As New Location()
-                            isLog = True
-                            Try
-                                sheetrowcounter2 += 1
-                                sheetrowcounter2 += 3
-                                sheet2.Cells(sheetrowcounter2, 0) = New Cell("S No")
-                                sheet.Cells.ColumnWidth(0) = 3000
-                                sheet2.Cells(sheetrowcounter2, 1) = New Cell("Date Time")
-                                sheet.Cells.ColumnWidth(1) = 3000
-                                sheet2.Cells(sheetrowcounter2, 2) = New Cell("GPS")
-                                sheet.Cells.ColumnWidth(2) = 3000
-                                sheet2.Cells(sheetrowcounter2, 3) = New Cell("Speed")
-                                sheet.Cells.ColumnWidth(3) = 3000
-                                sheet2.Cells(sheetrowcounter2, 4) = New Cell("Odometer")
-                                sheet.Cells.ColumnWidth(4) = 9000
-                                sheet2.Cells(sheetrowcounter2, 5) = New Cell("Ignition")
-                                sheet.Cells.ColumnWidth(5) = 3000
-                                sheet2.Cells(sheetrowcounter2, 6) = New Cell("PTO")
-                                sheet.Cells.ColumnWidth(6) = 3000
-                                sheet2.Cells(sheetrowcounter2, 7) = New Cell("Address")
-                                sheet.Cells.ColumnWidth(7) = 10000
-                                sheet2.Cells(sheetrowcounter2, 8) = New Cell("Nearest Town")
-                                sheet.Cells.ColumnWidth(8) = 10000
-                                sheet2.Cells(sheetrowcounter2, 9) = New Cell("Lat")
-                                sheet.Cells.ColumnWidth(9) = 3000
-                                sheet2.Cells(sheetrowcounter2, 10) = New Cell("Lon")
-                                sheet.Cells.ColumnWidth(10) = 3000
-
-                                sheetrowcounter2 += 1
-                            Catch ex As Exception
-                                WriteLog("Jaffa " & ex.Message)
-                            End Try
-
-
-                            Dim conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
-                            Dim cmd As SqlCommand = New SqlCommand("select distinct convert(varchar(19),timestamp,120) as datetime,alarm,vt.pto,gps_av,speed,gps_odometer,ignition_sensor,lat,lon from vehicle_history    vht Join  vehicleTBL vt on vt.plateno=vht.plateno and " &
-              "  vt.plateno ='" & tplateno & "' and gps_av='A' and ignition_sensor<>0  and timestamp between '" & tbdt & "' and '" & tedt & "'", conn)
-                            Dim dr As SqlDataReader
-                            Dim i As Integer = 1
-                            '   WriteLog(cmd.CommandText)
-                            Try
-                                conn.Open()
-                                dr = cmd.ExecuteReader()
-
-                                While dr.Read()
-                                    Try
-                                        sheet2.Cells(sheetrowcounter2, 0) = New Cell(i)
-                                        sheet2.Cells(sheetrowcounter2, 1) = New Cell(Convert.ToDateTime(dr("datetime")).ToString("yyyy/MM/dd HH:mm:ss"))
-                                        sheet2.Cells(sheetrowcounter2, 2) = New Cell(dr("gps_av").ToString())
-                                        sheet2.Cells(sheetrowcounter2, 3) = New Cell(Convert.ToDouble(System.Convert.ToDouble(dr("speed")).ToString("0.00")))
-                                        sheet2.Cells(sheetrowcounter2, 4) = New Cell(Convert.ToDouble((System.Convert.ToDouble(dr("gps_odometer")) / 100.0).ToString("0.00")))
-
-                                        If dr("ignition_sensor") = 1 Then
-                                            sheet2.Cells(sheetrowcounter2, 5) = New Cell("ON")
-                                        Else
-                                            sheet2.Cells(sheetrowcounter2, 5) = New Cell("OFF")
-                                        End If
-
-                                        If dr("pto") Then
-                                            sheet2.Cells(sheetrowcounter2, 6) = New Cell(dr("alarm").ToString())
-                                        Else
-                                            sheet2.Cells(sheetrowcounter2, 6) = New Cell("--")
-                                        End If
-
-                                        sheet2.Cells(sheetrowcounter2, 7) = New Cell(StripTags(locObj.GetLocation(dr("lat"), dr("lon")).ToString()))
-                                        sheet2.Cells(sheetrowcounter2, 8) = New Cell(locObj.GetNearestTown(dr("lat"), dr("lon")).ToString())
-                                        sheet2.Cells(sheetrowcounter2, 9) = New Cell(Convert.ToDouble(Convert.ToDouble(dr("lat")).ToString("0.0000")))
-                                        sheet2.Cells(sheetrowcounter2, 10) = New Cell(Convert.ToDouble(Convert.ToDouble(dr("lon")).ToString("0.0000")))
-                                        sheetrowcounter2 += 1
-                                        i += 1
-                                    Catch ex As Exception
-                                        WriteLog("My DR Loop  : " & ex.Message)
-                                    End Try
-                                End While
-
-                            Catch ex As Exception
-                                WriteLog("DR loop : " & ex.Message)
-                            Finally
-                                conn.Close()
-
-                            End Try
-                        End If
-                    End If
-
-                Catch ex As Exception
-                    WriteLog("Outer loop : " & ex.Message)
-                Finally
-
-                End Try
-                wb.Worksheets.Add(sheet)
-                If isLog Then
-                    wb.Worksheets.Add(sheet2)
-                End If
-
-
-
-            Catch ex As Exception
-                WriteLog("p : " & ex.Message)
-            End Try
-
-
-          
-
-
-
+            If tplateno <> "ALL PLATES" AndAlso IsValidDateRange(tbdt, tedt) Then
+                Dim sheet2 As New ExcelLibrary.SpreadSheet.Worksheet(tplateno & " Log report")
+                AddLogReport(sheet2, tplateno, tbdt, tedt, sheetrowcounter2)
+                wb.Worksheets.Add(sheet2)
+                isLog = True
+            End If
+            
+            wb.Worksheets.Add(sheet)
+            
+            ' Generate and send Excel file
             Response.Clear()
             Response.ContentType = "application/vnd.ms-excel"
             Response.AddHeader("content-disposition", "attachment;filename=DeliveryMonitoringSummaryDaily.xls")
-
-            Dim m As System.IO.MemoryStream = New System.IO.MemoryStream()
+            
+            Dim m As New System.IO.MemoryStream()
             wb.SaveToStream(m)
             m.WriteTo(Response.OutputStream)
-
+            
         Catch ex As Exception
-            WriteLog("Final loop : " & ex.Message)
+            SecurityHelper.LogSecurityEvent("GENERATE_EXCEL_ERROR", "Error generating Excel report: " & ex.Message)
+            Throw
         End Try
     End Sub
-
+    
+    Private Sub AddColumnHeaders(sheet As ExcelLibrary.SpreadSheet.Worksheet, ByRef rowCounter As Integer)
+        ' Add shift headers
+        sheet.Cells(rowCounter, 8) = New Cell("Out Weight Bridge")
+        sheet.Cells(rowCounter, 18) = New Cell("Journey Trial")
+        sheet.Cells(rowCounter, 22) = New Cell("Journey Back")
+        rowCounter += 1
+        
+        ' Add detailed column headers
+        Dim headers() As String = {
+            "Customer/Ship To Name", "SHIP TO CODE", "ORDER NO", "EX", "TPT", "Vehicle No", "MT", "DN No",
+            "Date", "Time", "Journey to Cust", "ATA", "ATD", "Time Spent at Site", "Back to Source",
+            "PTO ON Time", "PTO OFF Time", "Stop/Idling >15 Mins", "Geofence", "Duration", "PTO", "PTO Status",
+            "Stop/Idling >15 Mins", "Geofence", "Duration", "PTO", "PTO Status", "Data Lost & V-Data",
+            "Driver Name", "DN Qty", "Travelling {Mins}", "Distance", "Loading {Mins}", "Waiting {Mins}", "Unloading {Mins}"
+        }
+        
+        For i As Integer = 0 To headers.Length - 1
+            sheet.Cells(rowCounter, i) = New Cell(headers(i))
+            sheet.Cells.ColumnWidth(i) = 3000
+        Next
+        
+        ' Set specific column widths
+        sheet.Cells.ColumnWidth(0) = 15000
+        sheet.Cells.ColumnWidth(4) = 10000
+        sheet.Cells.ColumnWidth(7) = 10000
+    End Sub
+    
+    Private Sub AddDataRows(sheet As ExcelLibrary.SpreadSheet.Worksheet, t As DataTable, ByRef rowCounter As Integer)
+        For i As Integer = 0 To t.Rows.Count - 1
+            Try
+                For j As Integer = 0 To Math.Min(t.Columns.Count - 1, 34)
+                    Dim cellValue As Object = t.DefaultView.Item(i)(j)
+                    
+                    If IsDBNull(cellValue) Then
+                        sheet.Cells(rowCounter, j) = New Cell("-")
+                    Else
+                        Dim stringValue As String = cellValue.ToString()
+                        
+                        ' Clean HTML tags and sanitize
+                        stringValue = StripTags(stringValue)
+                        stringValue = stringValue.Replace("<br/>", vbCrLf)
+                        
+                        ' Try to convert to appropriate data type
+                        Dim numericValue As Double
+                        If Double.TryParse(stringValue, numericValue) Then
+                            sheet.Cells(rowCounter, j) = New Cell(numericValue)
+                        Else
+                            sheet.Cells(rowCounter, j) = New Cell(SecurityHelper.SanitizeForHtml(stringValue))
+                        End If
+                    End If
+                Next
+                rowCounter += 1
+            Catch ex As Exception
+                WriteLog("Error processing row " & i & ": " & ex.Message)
+            End Try
+        Next
+    End Sub
+    
+    Private Sub AddLogReport(sheet2 As ExcelLibrary.SpreadSheet.Worksheet, tplateno As String, tbdt As String, tedt As String, ByRef rowCounter As Integer)
+        Try
+            sheet2.Cells(rowCounter, 0) = New Cell("Log report for plateno: " & tplateno & " From " & tbdt & " To " & tedt)
+            rowCounter += 4
+            
+            ' Add log headers
+            Dim logHeaders() As String = {"S No", "Date Time", "GPS", "Speed", "Odometer", "Ignition", "PTO", "Address", "Nearest Town", "Lat", "Lon"}
+            For i As Integer = 0 To logHeaders.Length - 1
+                sheet2.Cells(rowCounter, i) = New Cell(logHeaders(i))
+                sheet2.Cells.ColumnWidth(i) = 3000
+            Next
+            rowCounter += 1
+            
+            ' Get log data
+            Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                Dim query As String = "SELECT DISTINCT CONVERT(varchar(19),timestamp,120) AS datetime, alarm, vt.pto, gps_av, speed, gps_odometer, ignition_sensor, lat, lon FROM vehicle_history vht JOIN vehicleTBL vt ON vt.plateno = vht.plateno WHERE vt.plateno = @plateno AND gps_av = 'A' AND ignition_sensor <> 0 AND timestamp BETWEEN @beginDate AND @endDate ORDER BY datetime"
+                
+                Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                    cmd.Parameters.AddWithValue("@plateno", tplateno)
+                    cmd.Parameters.AddWithValue("@beginDate", tbdt)
+                    cmd.Parameters.AddWithValue("@endDate", tedt)
+                    
+                    conn.Open()
+                    Using dr As SqlDataReader = cmd.ExecuteReader()
+                        Dim recordNumber As Integer = 1
+                        
+                        While dr.Read()
+                            Try
+                                sheet2.Cells(rowCounter, 0) = New Cell(recordNumber)
+                                sheet2.Cells(rowCounter, 1) = New Cell(Convert.ToDateTime(dr("datetime")).ToString("yyyy/MM/dd HH:mm:ss"))
+                                sheet2.Cells(rowCounter, 2) = New Cell(SecurityHelper.SanitizeForHtml(dr("gps_av").ToString()))
+                                sheet2.Cells(rowCounter, 3) = New Cell(Convert.ToDouble(dr("speed")).ToString("0.00"))
+                                sheet2.Cells(rowCounter, 4) = New Cell((Convert.ToDouble(dr("gps_odometer")) / 100.0).ToString("0.00"))
+                                sheet2.Cells(rowCounter, 5) = New Cell(If(Convert.ToBoolean(dr("ignition_sensor")), "ON", "OFF"))
+                                sheet2.Cells(rowCounter, 6) = New Cell(If(Convert.ToBoolean(dr("pto")), SecurityHelper.SanitizeForHtml(dr("alarm").ToString()), "--"))
+                                sheet2.Cells(rowCounter, 7) = New Cell("Address data removed for security")
+                                sheet2.Cells(rowCounter, 8) = New Cell("Town data removed for security")
+                                sheet2.Cells(rowCounter, 9) = New Cell(Convert.ToDouble(dr("lat")).ToString("0.0000"))
+                                sheet2.Cells(rowCounter, 10) = New Cell(Convert.ToDouble(dr("lon")).ToString("0.0000"))
+                                
+                                rowCounter += 1
+                                recordNumber += 1
+                            Catch ex As Exception
+                                WriteLog("Error processing log record: " & ex.Message)
+                            End Try
+                        End While
+                    End Using
+                End Using
+            End Using
+            
+        Catch ex As Exception
+            WriteLog("Error adding log report: " & ex.Message)
+        End Try
+    End Sub
+    
+    Private Function IsValidDateRange(tbdt As String, tedt As String) As Boolean
+        Try
+            Dim startDate As DateTime = Convert.ToDateTime(tbdt)
+            Dim endDate As DateTime = Convert.ToDateTime(tedt)
+            Return DateDiff(DateInterval.Minute, startDate, endDate) <= 1440 ' 24 hours
+        Catch
+            Return False
+        End Try
+    End Function
+    
     Function StripTags(ByVal html As String) As String
-        ' Remove HTML tags.
+        If String.IsNullOrEmpty(html) Then
+            Return String.Empty
+        End If
+        
+        ' Remove HTML tags using regex
         Return Regex.Replace(html, "<.*?>", "")
     End Function
 
     Protected Sub WriteLog(ByVal message As String)
         Try
-            If (message.Length > 0) Then
-                Dim sw As New StreamWriter(Server.MapPath("") & "\MyLog.txt", FileMode.Append)
-                sw.WriteLine(DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") & " - " & message)
-                sw.Close()
+            If Not String.IsNullOrEmpty(message) Then
+                Dim logPath As String = Server.MapPath("~/App_Data/ExcelLog.txt")
+                Dim logEntry As String = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") & " - " & SecurityHelper.SanitizeForHtml(message)
+                
+                Using sw As New StreamWriter(logPath, True)
+                    sw.WriteLine(logEntry)
+                End Using
             End If
         Catch ex As Exception
-
+            ' Silent fail for logging
         End Try
     End Sub
 End Class
