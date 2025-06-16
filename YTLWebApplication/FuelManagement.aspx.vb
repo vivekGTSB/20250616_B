@@ -10,309 +10,405 @@ Partial Class FuelManagement
 
     Protected Overrides Sub OnInit(ByVal e As System.EventArgs)
         Try
-
-            If Request.Cookies("userinfo") Is Nothing Then
-                Response.Redirect("Login.aspx")
+            ' Check authentication using secure helper
+            If Not AuthenticationHelper.IsUserAuthenticated() Then
+                Response.Redirect("~/Login.aspx")
+                Return
             End If
-
-            Dim cmd As SqlCommand
-            Dim dr As SqlDataReader
-
-            Dim userid As String = Request.Cookies("userinfo")("userid")
-            Dim role As String = Request.Cookies("userinfo")("role")
-            Dim userslist As String = Request.Cookies("userinfo")("userslist")
-
-            Dim conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
-            cmd = New SqlCommand("select userid, username,dbip from userTBL where role='User' order by username", conn)
-            If role = "User" Then
-                cmd = New SqlCommand("select userid, username, dbip from userTBL where userid='" & userid & "'", conn)
-            ElseIf role = "SuperUser" Or role = "Operator" Then
-                cmd = New SqlCommand("select userid, username, dbip from userTBL where userid in (" & userslist & ") order by username", conn)
-            End If
-            conn.Open()
-            dr = cmd.ExecuteReader()
-            While dr.Read()
-                ddlUsername.Items.Add(New ListItem(dr("username"), dr("userid")))
-            End While
-            dr.Close()
-            If role = "User" Then
-                ddlUsername.Items.Remove("--Select User Name--")
-                ddlUsername.SelectedValue = userid
-                getPlateNo(userid)
-            End If
-            conn.Close()
-
+            
+            ' Get user info from session
+            Dim userid As String = HttpContext.Current.Session("userid").ToString()
+            Dim role As String = HttpContext.Current.Session("role").ToString()
+            Dim userslist As String = HttpContext.Current.Session("userslist").ToString()
+            
+            LoadUsers(userid, role, userslist)
+            
         Catch ex As Exception
-
-
+            SecurityHelper.LogSecurityEvent("INIT_ERROR", "Error in OnInit: " & ex.Message)
+            Response.Redirect("~/Login.aspx")
+        Finally
+            MyBase.OnInit(e)
         End Try
-        MyBase.OnInit(e)
+    End Sub
+    
+    Private Sub LoadUsers(userid As String, role As String, userslist As String)
+        Try
+            Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                Dim query As String = "SELECT userid, username FROM userTBL WHERE role='User' ORDER BY username"
+                
+                If role = "User" Then
+                    query = "SELECT userid, username FROM userTBL WHERE userid = @userid ORDER BY username"
+                ElseIf role = "SuperUser" Or role = "Operator" Then
+                    query = "SELECT userid, username FROM userTBL WHERE userid IN (" & userslist & ") ORDER BY username"
+                End If
+                
+                Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                    If role = "User" Then
+                        cmd.Parameters.AddWithValue("@userid", userid)
+                    End If
+                    
+                    conn.Open()
+                    Using dr As SqlDataReader = cmd.ExecuteReader()
+                        ddlusername.Items.Clear()
+                        ddlusername.Items.Add(New ListItem("--Select User Name--", ""))
+                        
+                        While dr.Read()
+                            ddlusername.Items.Add(New ListItem(SecurityHelper.SanitizeForHtml(dr("username").ToString()), dr("userid").ToString()))
+                        End While
+                    End Using
+                End Using
+            End Using
+            
+            ' Auto-select user if single user role
+            If role = "User" AndAlso ddlusername.Items.Count > 1 Then
+                ddlusername.SelectedValue = userid
+                GetPlateNumbers(userid)
+            End If
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("LOAD_USERS_ERROR", "Error loading users: " & ex.Message)
+        End Try
     End Sub
 
     Protected Sub Page_Load(ByVal sender As Object, ByVal e As System.EventArgs) Handles Me.Load
         Try
-            Dim userid As String = Request.Cookies("userinfo")("userid")
-            Dim role As String = Request.Cookies("userinfo")("role")
-            Dim userslist As String = Request.Cookies("userinfo")("userslist")
-
+            ' Validate session
+            If Not AuthenticationHelper.IsUserAuthenticated() Then
+                Response.Redirect("~/Login.aspx")
+                Return
+            End If
+            
+            ' Get user info from session
+            Dim userid As String = HttpContext.Current.Session("userid").ToString()
+            
+            ' Set add fuel page based on user permissions
             If userid = "0214" Then
                 addfuelpage = "AddFuelToAll.aspx"
             End If
 
-            ImageButton1.Attributes.Add("onclick", "return mysubmit()")
-
             If Page.IsPostBack = False Then
-                txtBeginDate.Value = Now().ToString("yyyy/MM/dd")
-                txtEndDate.Value = Now().ToString("yyyy/MM/dd")
+                ' Generate CSRF token
+                hdnCSRFToken.Value = SecurityHelper.GenerateCSRFToken()
+                
+                txtBeginDate.Text = DateTime.Now.ToString("yyyy-MM-dd")
+                txtEndDate.Text = DateTime.Now.ToString("yyyy-MM-dd")
+                
+                ImageButton1.Attributes.Add("onclick", "return mysubmit();")
                 delete1.Attributes.Add("onclick", "return deleteconfirmation();")
                 delete2.Attributes.Add("onclick", "return deleteconfirmation();")
+                btnDownload.Attributes.Add("onclick", "return validateDownload();")
 
-                If Request.QueryString("s") <> "" Then
+                ' Handle query string parameters for updates
+                If Not String.IsNullOrEmpty(Request.QueryString("s")) Then
                     CompleteUpdateFuel()
                 End If
-
             End If
 
             LimitUserAccess()
-
             FillGrid()
+            
         Catch ex As Exception
-
+            SecurityHelper.LogSecurityEvent("PAGE_LOAD_ERROR", "Error in Page_Load: " & ex.Message)
         End Try
     End Sub
 
     Public Sub FillGrid()
         Try
-
             Dim userid As String = ddlusername.SelectedValue
             Dim plateno As String = ddlpleate.SelectedValue
-            Dim begintimestamp = txtBeginDate.Value & " " & ddlbh.SelectedValue & ":" & ddlbm.SelectedValue & ":00"
-            Dim endtimestamp = txtEndDate.Value & " " & ddleh.SelectedValue & ":" & ddlem.SelectedValue & ":59"
-
-            Dim userstable As New DataTable
-            Dim ok As String = "no"
-            Dim condition As String = ""
-            Dim r As DataRow
-            userstable.Rows.Clear()
-            userstable.Columns.Add(New DataColumn("chk"))
-            userstable.Columns.Add(New DataColumn("S No"))
-            userstable.Columns.Add(New DataColumn("Plate No"))
-            userstable.Columns.Add(New DataColumn("Date Time"))
-            userstable.Columns.Add(New DataColumn("Fuel Id"))
-            userstable.Columns.Add(New DataColumn("Fuel Station Code"))
-            userstable.Columns.Add(New DataColumn("Fuel Type"))
-            userstable.Columns.Add(New DataColumn("Liters"))
-            userstable.Columns.Add(New DataColumn("Cost"))
-
-            Dim conn As SqlConnection = New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
-
-            'If plateno = "--All Plate Numbers--" Then
-            '    condition = ""
-            '    fuelgrid.Columns.Item(2).Visible = True
-            'Else
-            '    condition = " and plateno='" & plateno & "'"
-            '    fuelgrid.Columns.Item(2).Visible = False
-            'End If
-
-            If Not userid = "--Select User Name--" And Not plateno = "--Select Plate No--" Then
-
-                'Dim cmd As SqlCommand = New SqlCommand("select fuelid,userid,plateno,convert(varchar(19),timestamp,120) as timestamp,stationcode,fueltype,liters,cost from fuel where userid='" & userid & "'" & condition & " and timestamp between '" & begintimestamp & "' and '" & endtimestamp & "' order by plateno,timestamp", conn)
-                'If userid = "--All Users--" Then
-                '    Dim role As String = Session("role")
-                '    Dim userslist As String = Session("userslist")
-                '    cmd = New SqlCommand("select fuelid,userid,plateno,convert(varchar(19),timestamp,120) as timestamp,stationcode,fueltype,liters,cost from fuel where timestamp between '" & begintimestamp & "' and '" & endtimestamp & "'" & condition & "order by plateno,timestamp", conn)
-                '    If role = "User" Then
-                '        cmd = New SqlCommand("select fuelid,userid,plateno,convert(varchar(19),timestamp,120) as timestamp,stationcode,fueltype,liters,cost from fuel where userid='" & userid & "' and " & condition & " timestamp between '" & begintimestamp & "' and '" & endtimestamp & "' order by plateno,timestamp", conn)
-                '    ElseIf role = "SuperUser" Or role = "Operator" Then
-                '        cmd = New SqlCommand("select fuelid,userid,plateno,convert(varchar(19),timestamp,120) as timestamp,stationcode,fueltype,liters,cost from fuel where userid in(" & userslist & ")  " & condition & " and timestamp between '" & begintimestamp & "' and '" & endtimestamp & "' order by plateno,timestamp", conn)
-                '    End If
-                'End If
-                Dim cmd As SqlCommand = New SqlCommand("select fuelid,userid,plateno,convert(varchar(19),timestamp,120) as timestamp,stationcode,fueltype,liters,cost from fuel where plateno='" & plateno & "' and " & condition & " timestamp between '" & begintimestamp & "' and '" & endtimestamp & "' order by plateno,timestamp", conn)
-                conn.Open()
-                Dim dr As SqlDataReader = cmd.ExecuteReader()
-
-                Dim i As Int32 = 1
-                While dr.Read()
-                    r = userstable.NewRow
-                    If LimitUserAccess() = True Then
-                        r(0) = ""
-                        r(2) = dr("plateno")
-                    Else
-                        r(0) = "<input type=""checkbox"" name=""chk"" value=""" & dr("fuelid") & """/>"
-                        r(2) = "<a href= UpdateFuel.aspx?fuelid=" & dr("fuelid") & " title='Update'> " & dr("plateno") & " </a>"
-                    End If
-                    r(1) = i.ToString()
-                    r(3) = dr("timestamp")
-                    r(4) = dr("fuelid")
-                    r(5) = dr("stationcode")
-                    r(6) = dr("fueltype")
-                    r(7) = System.Convert.ToDouble(dr("liters")).ToString("0.00")
-                    r(8) = System.Convert.ToDouble(dr("cost")).ToString("0.00")
-                    userstable.Rows.Add(r)
-                    i = i + 1
-                    ok = "yes"
-                End While
-                'End While
-                conn.Close()
+            
+            ' Validate inputs
+            If Not SecurityHelper.ValidateInput(userid, "numeric") OrElse 
+               Not SecurityHelper.ValidateInput(plateno, "plateno") Then
+                Return
             End If
-            If ok = "no" Then
-                'No Records Found
+            
+            Dim beginTimestamp As String = txtBeginDate.Text & " " & ddlbh.SelectedValue & ":" & ddlbm.SelectedValue & ":00"
+            Dim endTimestamp As String = txtEndDate.Text & " " & ddleh.SelectedValue & ":" & ddlem.SelectedValue & ":59"
+            
+            ' Validate dates
+            If Not SecurityHelper.ValidateInput(txtBeginDate.Text, "date") OrElse 
+               Not SecurityHelper.ValidateInput(txtEndDate.Text, "date") Then
+                Return
+            End If
 
-                r = userstable.NewRow
-                r(0) = "-"
-                r(1) = "-"
-                r(2) = "-"
-                r(3) = "-"
-                r(4) = "-"
-                r(5) = "-"
-                r(6) = "-"
-                r(7) = "-"
-                r(8) = "-"
-                userstable.Rows.Add(r)
+            Dim usersTable As New DataTable
+            usersTable.Columns.Add(New DataColumn("chk"))
+            usersTable.Columns.Add(New DataColumn("S No"))
+            usersTable.Columns.Add(New DataColumn("Plate No"))
+            usersTable.Columns.Add(New DataColumn("Date Time"))
+            usersTable.Columns.Add(New DataColumn("Fuel Id"))
+            usersTable.Columns.Add(New DataColumn("Fuel Station Code"))
+            usersTable.Columns.Add(New DataColumn("Fuel Type"))
+            usersTable.Columns.Add(New DataColumn("Liters"))
+            usersTable.Columns.Add(New DataColumn("Cost"))
 
+            If Not String.IsNullOrEmpty(userid) AndAlso Not String.IsNullOrEmpty(plateno) Then
+                Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                    Dim query As String = "SELECT fuelid, userid, plateno, CONVERT(varchar(19), timestamp, 120) AS timestamp, stationcode, fueltype, liters, cost FROM fuel WHERE plateno = @plateno AND timestamp BETWEEN @beginTime AND @endTime ORDER BY timestamp DESC"
+                    
+                    Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                        cmd.Parameters.AddWithValue("@plateno", plateno)
+                        cmd.Parameters.AddWithValue("@beginTime", beginTimestamp)
+                        cmd.Parameters.AddWithValue("@endTime", endTimestamp)
+                        
+                        conn.Open()
+                        Using dr As SqlDataReader = cmd.ExecuteReader()
+                            Dim i As Integer = 1
+                            While dr.Read()
+                                Dim r As DataRow = usersTable.NewRow()
+                                
+                                If LimitUserAccess() Then
+                                    r("chk") = ""
+                                    r("Plate No") = SecurityHelper.SanitizeForHtml(dr("plateno").ToString())
+                                Else
+                                    r("chk") = ""
+                                    r("Plate No") = String.Format("<a href=""UpdateFuel.aspx?fuelid={0}"" title=""Update"">{1}</a>", 
+                                                                HttpUtility.UrlEncode(dr("fuelid").ToString()), 
+                                                                SecurityHelper.SanitizeForHtml(dr("plateno").ToString()))
+                                End If
+                                
+                                r("S No") = i.ToString()
+                                r("Date Time") = SecurityHelper.SanitizeForHtml(dr("timestamp").ToString())
+                                r("Fuel Id") = SecurityHelper.SanitizeForHtml(dr("fuelid").ToString())
+                                r("Fuel Station Code") = SecurityHelper.SanitizeForHtml(dr("stationcode").ToString())
+                                r("Fuel Type") = SecurityHelper.SanitizeForHtml(dr("fueltype").ToString())
+                                r("Liters") = Convert.ToDouble(dr("liters")).ToString("0.00")
+                                r("Cost") = Convert.ToDouble(dr("cost")).ToString("0.00")
+                                
+                                usersTable.Rows.Add(r)
+                                i += 1
+                            End While
+                        End Using
+                    End Using
+                End Using
+            End If
+
+            If usersTable.Rows.Count = 0 Then
+                Dim r As DataRow = usersTable.NewRow()
+                For j As Integer = 0 To usersTable.Columns.Count - 1
+                    r(j) = "-"
+                Next
+                usersTable.Rows.Add(r)
             End If
 
             Session.Remove("exceltable")
             Session.Remove("exceltable2")
-            fuelgrid.PageSize = noofrecords.SelectedValue
-            Session("exceltable") = userstable
-            fuelgrid.DataSource = userstable
+            
+            fuelgrid.PageSize = Convert.ToInt32(noofrecords.SelectedValue)
+            Session("exceltable") = usersTable
+            fuelgrid.DataSource = usersTable
             fuelgrid.DataBind()
+            
             ec = "true"
+            
             If fuelgrid.PageCount > 1 Then
                 show = True
             End If
 
-            If LimitUserAccess() = True Then
+            If LimitUserAccess() Then
                 fuelgrid.Columns(0).Visible = False
             End If
 
         Catch ex As Exception
-            Response.Write(ex.Message)
-
+            SecurityHelper.LogSecurityEvent("FILL_GRID_ERROR", "Error filling grid: " & ex.Message)
         End Try
     End Sub
 
-    Protected Sub DeleteDriver()
-
+    Protected Sub DeleteFuelRecords()
         Try
-            Dim conn As SqlConnection = New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
-            Dim command As SqlCommand
-            Dim fuelid As String = ""
-
-            Dim fuelids() As String = Request.Form("chk").Split(",")
-
-            For i As Int32 = 0 To fuelids.Length - 1
-                command = New SqlCommand("delete from fuel where fuelid='" & fuelids(i) & "'", conn)
-                Try
-                    conn.Open()
-                    command.ExecuteNonQuery()
-                Catch ex As Exception
-                Finally
-                    conn.Close()
-                End Try
+            ' Validate CSRF token
+            If Not SecurityHelper.ValidateCSRFToken(hdnCSRFToken.Value) Then
+                SecurityHelper.LogSecurityEvent("CSRF_VIOLATION", "Invalid CSRF token in DeleteFuelRecords")
+                Return
+            End If
+            
+            Dim selectedItems As New List(Of String)
+            
+            ' Collect selected items safely
+            For Each row As GridViewRow In fuelgrid.Rows
+                Dim chkSelect As CheckBox = TryCast(row.FindControl("chkSelect"), CheckBox)
+                Dim hdnFuelId As HiddenField = TryCast(row.FindControl("hdnFuelId"), HiddenField)
+                
+                If chkSelect IsNot Nothing AndAlso chkSelect.Checked AndAlso hdnFuelId IsNot Nothing Then
+                    selectedItems.Add(hdnFuelId.Value)
+                End If
             Next
-            FillGrid()
+            
+            If selectedItems.Count > 0 Then
+                Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                    For Each fuelId As String In selectedItems
+                        If SecurityHelper.ValidateInput(fuelId, "numeric") Then
+                            Dim query As String = "DELETE FROM fuel WHERE fuelid = @fuelid"
+                            Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                                cmd.Parameters.AddWithValue("@fuelid", fuelId)
+                                
+                                conn.Open()
+                                cmd.ExecuteNonQuery()
+                                conn.Close()
+                            End Using
+                        End If
+                    Next
+                End Using
+                
+                FillGrid()
+            End If
+            
         Catch ex As Exception
-
+            SecurityHelper.LogSecurityEvent("DELETE_FUEL_RECORDS_ERROR", "Error deleting fuel records: " & ex.Message)
         End Try
     End Sub
 
     Protected Sub fuelgrid_PageIndexChanging(ByVal sender As Object, ByVal e As System.Web.UI.WebControls.GridViewPageEventArgs) Handles fuelgrid.PageIndexChanging
-        'If ddlpleate.SelectedValue = "--All Plate Numbers--" Then
-        '    fuelgrid.Columns.Item(2).Visible = True
-        'Else
-        '    fuelgrid.Columns.Item(2).Visible = False
-        'End If
-        ec = "true"
-        fuelgrid.PageSize = noofrecords.SelectedValue
-        fuelgrid.DataSource = Session("exceltable")
-        fuelgrid.PageIndex = e.NewPageIndex
-        fuelgrid.DataBind()
+        Try
+            ec = "true"
+            fuelgrid.PageSize = Convert.ToInt32(noofrecords.SelectedValue)
+            fuelgrid.DataSource = Session("exceltable")
+            fuelgrid.PageIndex = e.NewPageIndex
+            fuelgrid.DataBind()
+            
+            If LimitUserAccess() Then
+                fuelgrid.Columns(0).Visible = False
+            End If
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("PAGE_INDEX_CHANGING_ERROR", "Error in page index changing: " & ex.Message)
+        End Try
     End Sub
 
     Protected Sub delete2_Click(ByVal sender As Object, ByVal e As System.Web.UI.ImageClickEventArgs) Handles delete2.Click
-        DeleteDriver()
+        DeleteFuelRecords()
     End Sub
 
     Protected Sub delete1_Click(ByVal sender As Object, ByVal e As System.Web.UI.ImageClickEventArgs) Handles delete1.Click
-        DeleteDriver()
+        DeleteFuelRecords()
     End Sub
 
     Protected Sub ImageButton1_Click(ByVal sender As Object, ByVal e As System.Web.UI.ImageClickEventArgs) Handles ImageButton1.Click
-        FillGrid()
-    End Sub
-
-    Protected Sub ddluser_SelectedIndexChanged(ByVal sender As Object, ByVal e As System.EventArgs) Handles ddlusername.SelectedIndexChanged
-        getPlateNo(ddlusername.SelectedValue)
-    End Sub
-
-    Protected Sub getPlateNo(ByVal uid As String)
         Try
-            If ddlUsername.SelectedValue <> "--Select User Name--" Then
-                ddlpleate.Items.Clear()
-                ddlpleate.Items.Add("--Select Plate No--")
-                Dim cmd As SqlCommand
-                Dim dr As SqlDataReader
-                Dim connection As New Redirect(ddlUsername.SelectedValue)
-                Dim conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings(connection.sqlConnection))
-
-                cmd = New SqlCommand("select plateno from vehicleTBL where userid='" & uid & "' order by plateno", conn)
-                conn.Open()
-                dr = cmd.ExecuteReader()
-                While dr.Read()
-                    ddlpleate.Items.Add(New ListItem(dr("plateno"), dr("plateno")))
-                End While
-                dr.Close()
-
-                conn.Close()
-            Else
-                ddlpleate.Items.Clear()
-                ddlpleate.Items.Add("--Select User Name--")
+            ' Validate CSRF token
+            If Not SecurityHelper.ValidateCSRFToken(hdnCSRFToken.Value) Then
+                SecurityHelper.LogSecurityEvent("CSRF_VIOLATION", "Invalid CSRF token in ImageButton1_Click")
+                Return
             End If
+            
+            FillGrid()
         Catch ex As Exception
-            Response.Write(ex.Message)
+            SecurityHelper.LogSecurityEvent("IMAGEBUTTON1_CLICK_ERROR", "Error in ImageButton1_Click: " & ex.Message)
+        End Try
+    End Sub
+
+    Protected Sub ddlusername_SelectedIndexChanged(ByVal sender As Object, ByVal e As System.EventArgs) Handles ddlusername.SelectedIndexChanged
+        Try
+            GetPlateNumbers(ddlusername.SelectedValue)
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("DDL_USERNAME_CHANGED_ERROR", "Error in ddlusername_SelectedIndexChanged: " & ex.Message)
+        End Try
+    End Sub
+
+    Protected Sub GetPlateNumbers(ByVal uid As String)
+        Try
+            ddlpleate.Items.Clear()
+            ddlpleate.Items.Add(New ListItem("--Select Plate No--", ""))
+            
+            If Not String.IsNullOrEmpty(uid) AndAlso SecurityHelper.ValidateInput(uid, "numeric") Then
+                Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                    Dim query As String = "SELECT plateno FROM vehicleTBL WHERE userid = @userid ORDER BY plateno"
+                    Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                        cmd.Parameters.AddWithValue("@userid", uid)
+                        
+                        conn.Open()
+                        Using dr As SqlDataReader = cmd.ExecuteReader()
+                            While dr.Read()
+                                ddlpleate.Items.Add(New ListItem(SecurityHelper.SanitizeForHtml(dr("plateno").ToString()), dr("plateno").ToString()))
+                            End While
+                        End Using
+                    End Using
+                End Using
+            End If
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("GET_PLATE_NUMBERS_ERROR", "Error getting plate numbers: " & ex.Message)
         End Try
     End Sub
 
     Protected Sub CompleteUpdateFuel()
-        Dim startdate As String = Request.QueryString("s")
-        Dim userid As String = Request.QueryString("u")
-        Dim plateno As String = Request.QueryString("p")
-
-        txtBeginDate.Value = Convert.ToDateTime(startdate).ToString("yyyy/MM/dd")
-        txtEndDate.Value = Convert.ToDateTime(startdate).ToString("yyyy/MM/dd")
-
-        ddlusername.SelectedValue = userid
-        getPlateNo(userid)
-        ddlpleate.SelectedValue = plateno
-        FillGrid()
+        Try
+            Dim startDate As String = Request.QueryString("s")
+            Dim userid As String = Request.QueryString("u")
+            Dim plateno As String = Request.QueryString("p")
+            
+            ' Validate inputs
+            If SecurityHelper.ValidateInput(startDate, "date") AndAlso 
+               SecurityHelper.ValidateInput(userid, "numeric") AndAlso 
+               SecurityHelper.ValidateInput(plateno, "plateno") Then
+                
+                txtBeginDate.Text = Convert.ToDateTime(startDate).ToString("yyyy-MM-dd")
+                txtEndDate.Text = Convert.ToDateTime(startDate).ToString("yyyy-MM-dd")
+                
+                ddlusername.SelectedValue = userid
+                GetPlateNumbers(userid)
+                ddlpleate.SelectedValue = plateno
+                FillGrid()
+            End If
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("COMPLETE_UPDATE_FUEL_ERROR", "Error in CompleteUpdateFuel: " & ex.Message)
+        End Try
     End Sub
 
-    Function getUserLevel() As String
+    Function GetUserLevel() As String
         Try
-            Dim cmd As SqlCommand
-            Dim Userlevel As String
-            Dim conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
-            cmd = New SqlCommand("select usertype from userTBL where userid='" & Request.Cookies("userinfo")("userid") & "'", conn)
-            conn.Open()
-            Userlevel = cmd.ExecuteScalar()
-            conn.Close()
-
-            Return Userlevel
-        Catch ex As SystemException
-            Response.Write(ex.Message)
+            Dim userid As String = HttpContext.Current.Session("userid").ToString()
+            
+            Using conn As New SqlConnection(System.Configuration.ConfigurationManager.AppSettings("sqlserverconnection"))
+                Dim query As String = "SELECT usertype FROM userTBL WHERE userid = @userid"
+                Using cmd As SqlCommand = SecurityHelper.CreateSafeCommand(query, conn)
+                    cmd.Parameters.AddWithValue("@userid", userid)
+                    
+                    conn.Open()
+                    Dim userLevel As Object = cmd.ExecuteScalar()
+                    Return If(userLevel IsNot Nothing, userLevel.ToString(), "")
+                End Using
+            End Using
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("GET_USER_LEVEL_ERROR", "Error getting user level: " & ex.Message)
+            Return ""
         End Try
     End Function
 
     Function LimitUserAccess() As Boolean
-        If getUserLevel() = "7" Then
-            delete1.Visible = False
-            delete2.Visible = False
-            Return True
-        Else
+        Try
+            If GetUserLevel() = "7" Then
+                delete1.Visible = False
+                delete2.Visible = False
+                Return True
+            Else
+                Return False
+            End If
+        Catch ex As Exception
             Return False
-        End If
+        End Try
     End Function
+
+    Protected Sub btnDownload_Click(ByVal sender As Object, ByVal e As System.EventArgs) Handles btnDownload.Click
+        Try
+            ' Validate CSRF token
+            If Not SecurityHelper.ValidateCSRFToken(hdnCSRFToken.Value) Then
+                SecurityHelper.LogSecurityEvent("CSRF_VIOLATION", "Invalid CSRF token in btnDownload_Click")
+                Return
+            End If
+            
+            If ec = "true" Then
+                Response.Redirect("ExcelReport.aspx?title=Fuel Management Report&plateno=" & HttpUtility.UrlEncode(ddlpleate.SelectedValue))
+            Else
+                ' Show error message
+            End If
+            
+        Catch ex As Exception
+            SecurityHelper.LogSecurityEvent("DOWNLOAD_ERROR", "Error in btnDownload_Click: " & ex.Message)
+        End Try
+    End Sub
 
 End Class
